@@ -1,9 +1,95 @@
 #include "nbt.h"
 
+ssize_t loadDB(const char* filename, void** data);
 void destroyTag(Tag* t);
 void destroyTagList(TagList* l);
 void destroyTagCompound(TagCompound* tc);
+size_t getTypeSize(uint8_t type);
+unsigned int parseList(void* addr, TagList* tl, uint8_t type);
+unsigned int parseCompound(void* addr, TagCompound* tc);
 unsigned int parsePayload(void* addr,Tag* t);
+unsigned int parseTag(void* addr, Tag* t);
+
+ssize_t loadDB(const char* filename, void** data) {
+    if(access(filename,R_OK) == -1) {
+        perror("Can't access file");
+        return -1;
+    }
+
+    struct stat sb;
+    unsigned int pos = 0;
+
+    int fd = open(filename,O_RDONLY);
+    if(fd == -1) {
+        perror("Can't open file");
+        return -2;
+    }
+    fstat(fd, &sb);
+
+    uint16_t header = 0;
+    if(pread(fd,&header,sizeof(uint16_t),0) == -1) {
+        perror("Unable to read header");
+        close(fd);
+        return -3;
+    }
+
+    void* filedata;
+    ssize_t filesize = sb.st_size;
+
+    if(header == GZIP_MAGIC) {
+        close(fd);
+        filedata = calloc(GZIP_BUFFER,sizeof(char));
+        gzFile file = gzopen(filename,"r");
+        if(!file) {
+            perror("Failed to gzopen() file");
+            free(filedata);
+            return -4;
+        }
+        int err;                    
+        int nRead;
+        size_t totalBytes = 0;
+        while((nRead = gzread(file, filedata+totalBytes, GZIP_BUFFER)) != 0) {
+            totalBytes += nRead;
+            if(!(totalBytes % GZIP_BUFFER)) {
+                void* newptr = realloc(filedata,totalBytes + GZIP_BUFFER);
+                if(newptr == NULL) {
+                    perror("Unable to realloc for decompression");
+                    gzclose(file);
+                    free(filedata);
+                    return -6;
+                }
+                filedata = newptr;
+            }
+        }
+        if(!gzeof(file)) {
+            const char * errorStr;
+            errorStr = gzerror(file, &err);
+            fprintf(stderr, "libz error: %s.\n", errorStr);
+            gzclose(file);
+            free(filedata);
+            return -5;
+        }
+        filesize = totalBytes;
+        gzclose (file);
+    } else {
+        filedata = malloc(filesize);
+        ssize_t nRead = 0;
+        size_t totalRead = 0;
+        
+        while((nRead = read(fd,filedata+totalRead,filesize-totalRead))) {
+            if(nRead == -1) {
+                if(errno == EINTR) {
+                    continue;
+                }
+                perror("Error reading file");
+                return -7;
+            }
+            totalRead += nRead;
+        }
+    }
+    *data = filedata;
+    return filesize;
+}
 
 void destroyTag(Tag* t) {
     if(t->nameLength) {
@@ -112,15 +198,33 @@ unsigned int parsePayload(void* addr,Tag* t) {
     t->payloadLength = getTypeSize(t->type); // initially, then particularly for lists/compounds/strings
     TagCompound* tc;
     TagList *tl;
+    uint16_t u16 = 0;
+    uint32_t u32 = 0;
+    uint64_t u64 = 0;
     switch(t->type) {
         case TAG_BYTE:
-        case TAG_SHORT:
-        case TAG_INT:
-        case TAG_LONG:
-        case TAG_FLOAT:
-        case TAG_DOUBLE:
             t->payload = calloc(1,t->payloadLength);
             memcpy(t->payload,pos,t->payloadLength);
+            pos += t->payloadLength;
+            break;
+        case TAG_SHORT:
+            u16 = __bswap_16(*(uint16_t*)pos);
+            t->payload = calloc(1,t->payloadLength);
+            memcpy(t->payload,&u16,t->payloadLength);
+            pos += t->payloadLength;
+            break;
+        case TAG_INT:
+        case TAG_FLOAT:
+            u32 = __bswap_32(*(uint32_t*)pos);
+            t->payload = calloc(1,t->payloadLength);
+            memcpy(t->payload,&u32,t->payloadLength);
+            pos += t->payloadLength;
+            break;
+        case TAG_LONG:
+        case TAG_DOUBLE:
+            u64 = __bswap_64(*(uint64_t*)pos);
+            t->payload = calloc(1,t->payloadLength);
+            memcpy(t->payload,&u64,t->payloadLength);
             pos += t->payloadLength;
             break;
         case TAG_STRING:

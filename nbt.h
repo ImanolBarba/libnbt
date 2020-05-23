@@ -7,10 +7,21 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <zlib.h>
 
 #ifndef REALLOC_SIZE
 #define REALLOC_SIZE 10
 #endif
+
+#ifndef GZIP_BUFFER
+#define GZIP_BUFFER 4096
+#endif
+
+#define GZIP_MAGIC 0x8B1F
 
 typedef struct Tag {
     uint8_t type;
@@ -46,6 +57,7 @@ enum TAG {
     TAG_INTARRAY
 };
 
+ssize_t loadDB(const char* filename, void** data);
 void destroyTag(Tag* t);
 unsigned int parseTag(void* addr, Tag* t);
 
