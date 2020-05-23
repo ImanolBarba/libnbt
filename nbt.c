@@ -96,13 +96,13 @@ void destroyTag(Tag* t) {
         free(t->name);
     }
 
-    if(t->type == TAG_BYTEARRAY || t->type == TAG_INTARRAY || t->type == TAG_LIST) {
-        destroyTagList((TagList*)t->payload);
-    } else if(t->type == TAG_COMPOUND) {
-        destroyTagCompound((TagCompound*)t->payload);
-    }
-
     if(t->payloadLength) {
+
+        if(t->type == TAG_BYTEARRAY || t->type == TAG_INTARRAY || t->type == TAG_LIST) {
+            destroyTagList((TagList*)t->payload);
+        } else if(t->type == TAG_COMPOUND) {
+            destroyTagCompound((TagCompound*)t->payload);
+        }
         free(t->payload);
     }
 }
@@ -111,12 +111,14 @@ void destroyTagList(TagList* l) {
     for(int i = 0; i < l->size; ++i) {
         destroyTag(&l->list[i]);
     }
+    free(l->list);
 }
 
 void destroyTagCompound(TagCompound* tc) {
     for(int i = 0; i < tc->numTags; ++i) {
         destroyTag(&tc->list[i]);
     }
+    free(tc->list);
 }
 
 size_t getTypeSize(uint8_t type) {
