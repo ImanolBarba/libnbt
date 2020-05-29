@@ -1,4 +1,6 @@
 #include "nbt.h"
+#include "compression.h"
+#include "chunk.h"
 
 ssize_t loadDB(const char* filename, void** data);
 void destroyTag(Tag* t);
@@ -26,67 +28,31 @@ ssize_t loadDB(const char* filename, void** data) {
     }
     fstat(fd, &sb);
 
-    uint16_t header = 0;
-    if(pread(fd,&header,sizeof(uint16_t),0) == -1) {
-        perror("Unable to read header");
-        close(fd);
-        return -3;
-    }
-
     void* filedata;
     ssize_t filesize = sb.st_size;
 
-    if(header == GZIP_MAGIC) {
-        close(fd);
-        filedata = calloc(GZIP_BUFFER,sizeof(char));
-        gzFile file = gzopen(filename,"r");
-        if(!file) {
-            perror("Failed to gzopen() file");
-            free(filedata);
-            return -4;
-        }
-        int err;                    
-        int nRead;
-        size_t totalBytes = 0;
-        while((nRead = gzread(file, filedata+totalBytes, GZIP_BUFFER)) != 0) {
-            totalBytes += nRead;
-            if(!(totalBytes % GZIP_BUFFER)) {
-                void* newptr = realloc(filedata,totalBytes + GZIP_BUFFER);
-                if(newptr == NULL) {
-                    perror("Unable to realloc for decompression");
-                    gzclose(file);
-                    free(filedata);
-                    return -6;
-                }
-                filedata = newptr;
+    filedata = malloc(filesize);
+    ssize_t nRead = 0;
+    size_t totalRead = 0;
+    
+    while((nRead = read(fd,filedata+totalRead,filesize-totalRead))) {
+        if(nRead == -1) {
+            if(errno == EINTR) {
+                continue;
             }
+            perror("Error reading file");
+            return -7;
         }
-        if(!gzeof(file)) {
-            const char * errorStr;
-            errorStr = gzerror(file, &err);
-            fprintf(stderr, "libz error: %s.\n", errorStr);
-            gzclose(file);
-            free(filedata);
-            return -5;
-        }
-        filesize = totalBytes;
-        gzclose (file);
-    } else {
-        filedata = malloc(filesize);
-        ssize_t nRead = 0;
-        size_t totalRead = 0;
-        
-        while((nRead = read(fd,filedata+totalRead,filesize-totalRead))) {
-            if(nRead == -1) {
-                if(errno == EINTR) {
-                    continue;
-                }
-                perror("Error reading file");
-                return -7;
-            }
-            totalRead += nRead;
-        }
+        totalRead += nRead;
     }
+
+    if(*(uint16_t*)filedata == GZIP_MAGIC) {
+        void* decompressedFileData;
+        filesize = inflateGzip(filedata,filesize,&decompressedFileData);
+        free(filedata);
+        filedata = decompressedFileData;
+    }
+
     *data = filedata;
     return filesize;
 }
@@ -189,6 +155,12 @@ unsigned int parseCompound(void* addr, TagCompound* tc) {
         }
         pos += parseTag(pos,&list[numTags]);
     } while(list[numTags++].type != TAG_END);
+
+    void* newptr = reallocarray(list, numTags, sizeof(Tag));
+    if(!newptr) {
+        fprintf(stderr,"Unable to request memory realloc\n");
+    }
+    list = newptr;
 
     tc->list = list;
     tc->numTags = numTags-1;
