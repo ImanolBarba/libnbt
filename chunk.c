@@ -72,14 +72,20 @@ int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, siz
     void* compressedChunk;
     ssize_t compressedChunkLength = deflateGzip(chunkData,chunkLength,&compressedChunk,(header.compressionType == COMPRESSION_TYPE_ZLIB));
     if(compressedChunkLength > totalChunkLength) {
-        // insert new 4096 blocks
+        // Haven't determined if we can just allocate a new 4KiB sector for the chunk
+        // To avoid corrupting the region, let's just make the function fail and retry on another chunk that has
+        // free space at the end
+        close(fd);
+        free(compressedChunk);
+        fprintf(stderr,"Not enough free space to overwrite the chunk.\n\nOriginal chunk size (with padding): %d\nNew chunk size:%d\n",totalChunkLength,(unsigned int)compressedChunkLength);
+        return -6;
     }
     header.length = __bswap_32((uint32_t)compressedChunkLength+1);
     if(write(fd,&header,sizeof(ChunkHeader)) <= 0) {
         close(fd);
         free(compressedChunk);
         fprintf(stderr,"Unable to read chunk header: %s\n",strerror(errno));
-        return -6;
+        return -7;
     }
     ssize_t nWritten = 0;
     size_t totalWritten = 0;
@@ -92,7 +98,7 @@ int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, siz
             fprintf(stderr,"Unable to write chunk: %s\n",strerror(errno));
             close(fd);
             free(compressedChunk);
-            return -7;
+            return -8;
         }
         totalWritten += nWritten;
     }
