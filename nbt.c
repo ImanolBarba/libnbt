@@ -48,7 +48,7 @@ ssize_t loadDB(const char* filename, void** data) {
 
     if(*(uint16_t*)filedata == GZIP_MAGIC) {
         void* decompressedFileData;
-        filesize = inflateGzip(filedata,filesize,&decompressedFileData);
+        filesize = inflateGzip(filedata,filesize,&decompressedFileData,0);
         free(filedata);
         filedata = decompressedFileData;
     }

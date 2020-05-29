@@ -1,6 +1,6 @@
 #include "compression.h"
 
-ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData) {
+ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData, int headerless) {
     unsigned int increase = compDataLen/2;
     unsigned int uncompLength = compDataLen; // Later to be increased
 
@@ -13,13 +13,19 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData) {
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
   
-    if (inflateInit2(&strm, (16+MAX_WBITS)) != Z_OK) {
+    int err = Z_OK;
+    if(headerless) {
+        err = inflateInit(&strm);
+    } else {
+        err = inflateInit2(&strm, 16+MAX_WBITS);
+    }
+
+    if(err != Z_OK) {
         fprintf(stderr, "Unable to initialize zlib zstream for decompression\n");
         free(uncomp);
         return -1;
-    }  
+    }
   
-    int err = Z_OK;
     do {
         // If our output buffer is too small
         if(strm.total_out >= uncompLength ) {
@@ -41,7 +47,7 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData) {
         // Inflate another chunk.
         err = inflate (&strm, Z_SYNC_FLUSH);
         if(err != Z_OK && err != Z_STREAM_END) {
-            fprintf(stderr, "zlib error: %d.\n", err);
+            fprintf(stderr, "Error while inflating buffer: %d - %s.\n", err,strm.msg);
             inflateEnd(&strm);
             free(uncomp);
             return -3;
@@ -59,7 +65,7 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData) {
     return uncompLength;
 }
 
-ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData) {
+ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData, int headerless) {
     unsigned int compLength = unCompDataLen;
     unsigned int increase = compLength/4;
     char* comp = (char*)calloc(compLength, sizeof(char));
@@ -70,14 +76,20 @@ ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData) {
     strm.total_out = 0;
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
+
+    int err = Z_OK;
+    if(headerless) {
+        err = deflateInit(&strm, Z_DEFAULT_COMPRESSION);
+    } else {
+        err = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16+MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+    }
     
-    if(deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, (16+MAX_WBITS),8 , Z_DEFAULT_STRATEGY) != Z_OK) {
+    if(err != Z_OK) {
         fprintf(stderr, "Unable to initialize zlib zstream for compression\n");
         free(comp);
         return -1;
     }
 
-    int err = Z_OK;
     do {
         // If our output buffer is too small
         if (strm.total_out >= compLength) {
@@ -99,7 +111,7 @@ ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData) {
         // deflate another chunk
         err = deflate(&strm, Z_FINISH);
         if(err != Z_OK && err != Z_STREAM_END) {
-            fprintf(stderr, "Error while deflating buffer\n");
+            fprintf(stderr, "Error while deflating buffer: %d - %s\n",err,strm.msg);
             deflateEnd(&strm);
             free(comp);
             return -3;
