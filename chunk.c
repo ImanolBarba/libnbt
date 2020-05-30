@@ -32,7 +32,7 @@ int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, siz
     relativeChunk.z = chunk.z % 32;
 
     char* regionFilename = calloc(MAX_REGION_FILENAME_LENGTH + strlen(regionFolder),sizeof(char));
-    sprintf(regionFilename,"%s/r.%d.%d.mca.new",regionFolder,region.x,region.z);
+    sprintf(regionFilename,"%s/r.%d.%d.mca",regionFolder,region.x,region.z);
 
     if(access(regionFilename,R_OK | W_OK) == -1) {
         fprintf(stderr,"Can't access file %s: %s\n",regionFilename,strerror(errno));

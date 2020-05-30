@@ -125,8 +125,10 @@ ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData, int
         return -4;
     }
 
-    // Set OS Flag to 0x00: "FAT filesystem (MS-DOS, OS/2, NT/Win32)"
-    comp[OS_FLAG_OFFSET] = 0x00;
+    if(!headerless) {
+        // Set OS Flag to 0x00: "FAT filesystem (MS-DOS, OS/2, NT/Win32)"
+        comp[OS_FLAG_OFFSET] = 0x00;
+    }
 
     *compData = comp;
     return compLength;

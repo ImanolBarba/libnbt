@@ -11,6 +11,10 @@ unsigned int parseList(void* addr, TagList* tl, uint8_t type);
 unsigned int parseCompound(void* addr, TagCompound* tc);
 unsigned int parsePayload(void* addr,Tag* t);
 unsigned int parseTag(void* addr, Tag* t);
+size_t composeCompound(TagCompound* tc, void** data);
+size_t composeList(uint8_t listType, TagList* tl, void** data);
+size_t composePayload(Tag t, void** data);
+size_t composeTag(Tag t, void** data);
 
 ssize_t loadDB(const char* filename, void** data) {
     if(access(filename,R_OK) == -1) {
@@ -246,4 +250,145 @@ unsigned int parseTag(void* addr, Tag* t) {
     pos += parsePayload(pos,t);
 
     return pos-addr;
+}
+
+size_t composeCompound(TagCompound* tc, void** data) {
+    size_t totalPayloadLength = 0;
+    void* totalPayload = calloc(1,sizeof(char));
+    unsigned int pos = 0;
+    size_t childTagPayloadLength = 0;
+    void* childTagPayload;
+    for(int i = 0; i < tc->numTags; ++i) {
+        childTagPayloadLength = composeTag(tc->list[i],&childTagPayload);
+        totalPayloadLength += childTagPayloadLength;
+        void* newptr = realloc(totalPayload,totalPayloadLength);
+        if(newptr == NULL) {
+            fprintf(stderr, "Unable to realloc memory for child tag\n");
+            free(totalPayload);
+            free(childTagPayload);
+            return 0;
+        }
+        totalPayload = newptr;
+        memcpy(totalPayload+pos,childTagPayload,childTagPayloadLength);
+        free(childTagPayload);
+        pos += childTagPayloadLength;
+    }
+    void* newptr = realloc(totalPayload,++totalPayloadLength);
+    if(newptr == NULL) {
+        fprintf(stderr, "Unable to realloc memory for end tag\n");
+        free(totalPayload);
+        return 0;
+    }
+    totalPayload = newptr;
+    ((uint8_t*)totalPayload)[pos] = 0x00;
+    *data = totalPayload;
+    return totalPayloadLength;
+}
+
+size_t composeList(uint8_t listType, TagList* tl, void** data) {
+    size_t totalPayloadLength = 0;
+    if(listType == TAG_LIST) {
+        totalPayloadLength += sizeof(uint8_t);
+    }
+    void* totalPayload = calloc(totalPayloadLength + sizeof(uint32_t),sizeof(char));
+    if(listType == TAG_LIST) {
+        ((uint8_t*)totalPayload)[0] = tl->type;
+    }
+    uint32_t u32 = __bswap_32(tl->size);
+    memcpy((uint8_t*)totalPayload + totalPayloadLength,&u32,sizeof(uint32_t));
+    totalPayloadLength += sizeof(uint32_t);
+    
+    unsigned int pos = totalPayloadLength;
+    size_t childTagPayloadLength = 0;
+    void* childTagPayload;
+    for(int i = 0; i < tl->size; ++i) {
+        childTagPayloadLength = composePayload(tl->list[i],&childTagPayload);
+        totalPayloadLength += childTagPayloadLength;
+        void* newptr = realloc(totalPayload,totalPayloadLength);
+        if(newptr == NULL) {
+            fprintf(stderr, "Unable to realloc memory for child tag\n");
+            free(totalPayload);
+            free(childTagPayload);
+            return 0;
+        }
+        totalPayload = newptr;
+        memcpy(totalPayload+pos,childTagPayload,childTagPayloadLength);
+        free(childTagPayload);
+        pos += childTagPayloadLength;
+    }
+    
+    *data = totalPayload;
+    return totalPayloadLength;
+}
+
+size_t composePayload(Tag t, void** data) {
+    size_t payloadLength = getTypeSize(t.type); // initially, then particularly for lists/compounds/strings
+    void* payload;
+
+    uint16_t u16 = 0;
+    uint32_t u32 = 0;
+    uint64_t u64 = 0;
+    switch(t.type) {
+        case TAG_BYTE:
+            payload = calloc(1,payloadLength);
+            memcpy(payload,t.payload,t.payloadLength);
+            break;
+        case TAG_SHORT:
+            u16 = __bswap_16(*(uint16_t*)t.payload);
+            payload = calloc(1,payloadLength);
+            memcpy(payload,&u16,t.payloadLength);
+            break;
+        case TAG_INT:
+        case TAG_FLOAT:
+            u32 = __bswap_32(*(uint32_t*)t.payload);
+            payload = calloc(1,payloadLength);
+            memcpy(payload,&u32,t.payloadLength);
+            break;
+        case TAG_LONG:
+        case TAG_DOUBLE:
+            u64 = __bswap_64(*(uint64_t*)t.payload);
+            payload = calloc(1,payloadLength);
+            memcpy(payload,&u64,t.payloadLength);
+            break;
+        case TAG_STRING:
+            payloadLength = sizeof(uint16_t) + t.payloadLength;
+            payload = calloc(payloadLength,sizeof(char));
+            u16 = __bswap_16((uint16_t)t.payloadLength);
+            memcpy(payload,&u16,sizeof(uint16_t));
+            memcpy(payload + sizeof(uint16_t),t.payload,t.payloadLength);
+            break;
+        case TAG_COMPOUND:
+            payloadLength = composeCompound((TagCompound*)t.payload,&payload);
+            break;
+        case TAG_LIST:
+        case TAG_BYTEARRAY:
+        case TAG_INTARRAY:
+            payloadLength = composeList(t.type,(TagList*)t.payload,&payload);
+            break;
+    }
+
+    *data = payload;
+    return payloadLength;
+}
+
+size_t composeTag(Tag t, void** data) {
+    size_t headerSize = sizeof(uint8_t) + sizeof(uint16_t) + t.nameLength;
+    void* tagHeader = calloc(headerSize,sizeof(char));
+    ((uint8_t*)tagHeader)[0] = t.type;
+    uint16_t u16 = __bswap_16(t.nameLength);
+    memcpy(tagHeader+sizeof(uint8_t),&u16,sizeof(uint16_t));
+    memcpy(tagHeader+sizeof(uint8_t) + sizeof(uint16_t), t.name, t.nameLength);
+    void* tagPayload;
+    size_t payloadSize = composePayload(t,&tagPayload);
+    void* tagData = realloc(tagHeader,headerSize + payloadSize);
+    if(tagData == NULL) {
+        fprintf(stderr, "Unable to realloc memory to merge header and payload\n");
+        free(tagHeader);
+        free(tagPayload);
+        return 0;
+    }
+    memcpy(tagData + headerSize,tagPayload, payloadSize);
+    free(tagPayload);
+    *data = tagData;
+    return headerSize + payloadSize;
 }

@@ -26,7 +26,7 @@
 typedef struct Tag {
     uint8_t type;
     char* name;
-    unsigned int nameLength;
+    uint16_t nameLength;
     unsigned int payloadLength;
     void* payload;
 } Tag;
@@ -60,5 +60,6 @@ enum TAG {
 ssize_t loadDB(const char* filename, void** data);
 void destroyTag(Tag* t);
 unsigned int parseTag(void* addr, Tag* t);
+size_t composeTag(Tag t, void** data);
 
 #endif
