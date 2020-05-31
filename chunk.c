@@ -8,8 +8,8 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData);
 
 RegionID translateChunkToRegion(int x, int z) {
     RegionID region;
-    region.x = x/CHUNKS_PER_REGION;
-    region.z = z/CHUNKS_PER_REGION;
+    region.x = floor((double)x/CHUNKS_PER_REGION);
+    region.z = floor((double)z/CHUNKS_PER_REGION);
     return region;
 }
 
@@ -20,16 +20,16 @@ RegionID translateCoordsToRegion(double x, double y, double z) {
 
 ChunkID translateCoordsToChunk(double x, double y, double z) {
     ChunkID chunk;
-    chunk.x = x/BLOCKS_PER_CHUNK;
-    chunk.z = z/BLOCKS_PER_CHUNK;
+    chunk.x = floor((double)x/BLOCKS_PER_CHUNK);
+    chunk.z = floor((double)z/BLOCKS_PER_CHUNK);
     return chunk;
 }
 
 int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, size_t chunkLength) {
     RegionID region = translateChunkToRegion(chunk.x,chunk.z);
     ChunkID relativeChunk;
-    relativeChunk.x = chunk.x % 32;
-    relativeChunk.z = chunk.z % 32;
+    relativeChunk.x = chunk.x & 31;
+    relativeChunk.z = chunk.z & 31;
 
     char* regionFilename = calloc(MAX_REGION_FILENAME_LENGTH + strlen(regionFolder),sizeof(char));
     sprintf(regionFilename,"%s/r.%d.%d.mca",regionFolder,region.x,region.z);
@@ -110,8 +110,8 @@ int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, siz
 ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
     RegionID region = translateChunkToRegion(chunk.x,chunk.z);
     ChunkID relativeChunk;
-    relativeChunk.x = chunk.x % 32;
-    relativeChunk.z = chunk.z % 32;
+    relativeChunk.x = chunk.x & 31;
+    relativeChunk.z = chunk.z & 31;
 
     char* regionFilename = calloc(MAX_REGION_FILENAME_LENGTH + strlen(regionFolder),sizeof(char));
     sprintf(regionFilename,"%s/r.%d.%d.mca",regionFolder,region.x,region.z);
@@ -135,6 +135,11 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
         return -3;
     }
     chunkHeaderOffset = (__bswap_32(chunkHeaderOffset & 0x00FFFFFF) >> 8) * CHUNK_SECTOR_SIZE;
+    if(chunkHeaderOffset == 0) {
+        // Chunk not present. Hasn't been generated
+        close(fd); 
+        return 0;
+    }
 
     if(lseek(fd,chunkHeaderOffset,SEEK_SET) == -1) {
         close(fd);
@@ -150,6 +155,16 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
     }
     header.length = __bswap_32(header.length);
     ssize_t chunkLength = header.length;
+    if(header.compressionType != COMPRESSION_TYPE_ZLIB && header.compressionType != COMPRESSION_TYPE_GZIP) {
+        fprintf(stderr, "Invalid compression method. Proably reading the wrong data for the header\n");
+        close(fd); 
+        return -6;
+    }
+    if(header.length == 0) {
+        fprintf(stderr, "Header length is 0. Probably reading the wrong data for the header\n");
+        close(fd); 
+        return -7;
+    }
     
     void* compressedChunk = calloc(chunkLength,sizeof(char));
     ssize_t nRead = 0;
@@ -163,7 +178,7 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
             fprintf(stderr,"Unable to read chunk: %s\n",strerror(errno));
             close(fd);
             free(compressedChunk);
-            return -6;
+            return -8;
         }
         totalRead += nRead;
     }
@@ -174,7 +189,8 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
     
     if(chunkLength <= 0) {
         fprintf(stderr,"Error while decompressing chunk\n");
-        return -8;
+        free(compressedChunk);
+        return -9;
     }
     free(compressedChunk);
 

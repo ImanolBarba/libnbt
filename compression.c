@@ -45,7 +45,7 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData, int h
         strm.avail_out = uncompLength - strm.total_out;
 
         // Inflate another chunk.
-        err = inflate (&strm, Z_SYNC_FLUSH);
+        err = inflate(&strm, Z_SYNC_FLUSH);
         if(err != Z_OK && err != Z_STREAM_END) {
             fprintf(stderr, "Error while inflating buffer: %d - %s.\n", err,strm.msg);
             inflateEnd(&strm);

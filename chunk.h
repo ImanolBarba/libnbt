@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <byteswap.h>
+#include <math.h>
 
 #include "compression.h"
 
