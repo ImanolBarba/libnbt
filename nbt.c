@@ -8,18 +8,17 @@ void destroyTagList(TagList* l);
 void destroyTagCompound(TagCompound* tc);
 size_t getTypeSize(uint8_t type);
 unsigned int parseList(void* addr, TagList* tl, uint8_t type);
-unsigned int parseCompound(void* addr, TagCompound* tc);
-unsigned int parsePayload(void* addr,Tag* t);
-unsigned int parseTag(void* addr, Tag* t);
-size_t composeCompound(TagCompound* tc, void** data);
-size_t composeList(uint8_t listType, TagList* tl, void** data);
-size_t composePayload(Tag t, void** data);
-size_t composeTag(Tag t, void** data);
+ssize_t parseCompound(void* addr, TagCompound* tc);
+ssize_t parsePayload(void* addr,Tag* t);
+ssize_t parseTag(void* addr, Tag* t);
+ssize_t composeCompound(TagCompound* tc, void** data);
+ssize_t composeList(uint8_t listType, TagList* tl, void** data);
+ssize_t composePayload(Tag t, void** data);
+ssize_t composeTag(Tag t, void** data);
 
 ssize_t loadDB(const char* filename, void** data) {
     if(access(filename,R_OK) == -1) {
-        perror("Can't access file");
-        return -1;
+        return ACCESS_ERROR;
     }
 
     struct stat sb;
@@ -27,8 +26,7 @@ ssize_t loadDB(const char* filename, void** data) {
 
     int fd = open(filename,O_RDONLY);
     if(fd == -1) {
-        perror("Can't open file");
-        return -2;
+        return OPEN_ERROR;
     }
     fstat(fd, &sb);
 
@@ -44,8 +42,7 @@ ssize_t loadDB(const char* filename, void** data) {
             if(errno == EINTR) {
                 continue;
             }
-            perror("Error reading file");
-            return -7;
+            return READ_ERROR;
         }
         totalRead += nRead;
     }
@@ -144,7 +141,7 @@ unsigned int parseList(void* addr, TagList* tl, uint8_t type) {
     return pos - addr;
 }
 
-unsigned int parseCompound(void* addr, TagCompound* tc) {
+ssize_t parseCompound(void* addr, TagCompound* tc) {
     void* pos = addr;
     unsigned int numTags = 0;
     Tag* list = calloc(REALLOC_SIZE,sizeof(Tag));
@@ -152,8 +149,8 @@ unsigned int parseCompound(void* addr, TagCompound* tc) {
         if(numTags && !(numTags % REALLOC_SIZE)) {
             void* newptr = reallocarray(list, numTags + REALLOC_SIZE, sizeof(Tag));
             if(!newptr) {
-                fprintf(stderr,"Unable to request memory realloc\n");
-                break;
+                free(list);
+                return MEMORY_ERROR;
             }
             list = newptr;
         }
@@ -162,7 +159,8 @@ unsigned int parseCompound(void* addr, TagCompound* tc) {
 
     void* newptr = reallocarray(list, numTags, sizeof(Tag));
     if(!newptr) {
-        fprintf(stderr,"Unable to request memory realloc\n");
+        free(list);
+        return MEMORY_ERROR;
     }
     list = newptr;
 
@@ -171,9 +169,10 @@ unsigned int parseCompound(void* addr, TagCompound* tc) {
     return pos - addr;
 }
 
-unsigned int parsePayload(void* addr,Tag* t) {
+ssize_t parsePayload(void* addr,Tag* t) {
     void* pos = addr;
     t->payloadLength = getTypeSize(t->type); // initially, then particularly for lists/compounds/strings
+    ssize_t compoundTagPos = 0;
     TagCompound* tc;
     TagList *tl;
     uint16_t u16 = 0;
@@ -218,7 +217,12 @@ unsigned int parsePayload(void* addr,Tag* t) {
             tc = (TagCompound*)calloc(1,sizeof(TagCompound));
             t->payloadLength = sizeof(sizeof(TagCompound));
             t->payload = tc;
-            pos += parseCompound(pos,tc);
+            compoundTagPos = parseCompound(pos,tc);
+            if(compoundTagPos < 0) {
+                // Memory error while parsing TAG_COMPOUND
+                return compoundTagPos;
+            }
+            pos += compoundTagPos;
             break;
         case TAG_LIST:
         case TAG_BYTEARRAY:
@@ -232,7 +236,7 @@ unsigned int parsePayload(void* addr,Tag* t) {
     return pos - addr;
 }
 
-unsigned int parseTag(void* addr, Tag* t) {
+ssize_t parseTag(void* addr, Tag* t) {
     void* pos = addr;
     t->type = *((uint8_t*)pos);
     t->nameLength = 0;
@@ -247,12 +251,16 @@ unsigned int parseTag(void* addr, Tag* t) {
         }
         pos += sizeof(uint16_t) + t->nameLength;
     }
-    pos += parsePayload(pos,t);
+    ssize_t payloadPos = parsePayload(pos,t);
+    if(payloadPos < 0) {
+        return payloadPos;
+    }
+    pos += payloadPos;
 
     return pos-addr;
 }
 
-size_t composeCompound(TagCompound* tc, void** data) {
+ssize_t composeCompound(TagCompound* tc, void** data) {
     size_t totalPayloadLength = 0;
     void* totalPayload = calloc(1,sizeof(char));
     unsigned int pos = 0;
@@ -263,10 +271,9 @@ size_t composeCompound(TagCompound* tc, void** data) {
         totalPayloadLength += childTagPayloadLength;
         void* newptr = realloc(totalPayload,totalPayloadLength);
         if(newptr == NULL) {
-            fprintf(stderr, "Unable to realloc memory for child tag\n");
             free(totalPayload);
             free(childTagPayload);
-            return 0;
+            return MEMORY_ERROR;
         }
         totalPayload = newptr;
         memcpy(totalPayload+pos,childTagPayload,childTagPayloadLength);
@@ -275,9 +282,8 @@ size_t composeCompound(TagCompound* tc, void** data) {
     }
     void* newptr = realloc(totalPayload,++totalPayloadLength);
     if(newptr == NULL) {
-        fprintf(stderr, "Unable to realloc memory for end tag\n");
         free(totalPayload);
-        return 0;
+        return MEMORY_ERROR;
     }
     totalPayload = newptr;
     ((uint8_t*)totalPayload)[pos] = 0x00;
@@ -285,7 +291,7 @@ size_t composeCompound(TagCompound* tc, void** data) {
     return totalPayloadLength;
 }
 
-size_t composeList(uint8_t listType, TagList* tl, void** data) {
+ssize_t composeList(uint8_t listType, TagList* tl, void** data) {
     size_t totalPayloadLength = 0;
     if(listType == TAG_LIST) {
         totalPayloadLength += sizeof(uint8_t);
@@ -306,10 +312,9 @@ size_t composeList(uint8_t listType, TagList* tl, void** data) {
         totalPayloadLength += childTagPayloadLength;
         void* newptr = realloc(totalPayload,totalPayloadLength);
         if(newptr == NULL) {
-            fprintf(stderr, "Unable to realloc memory for child tag\n");
             free(totalPayload);
             free(childTagPayload);
-            return 0;
+            return MEMORY_ERROR;
         }
         totalPayload = newptr;
         memcpy(totalPayload+pos,childTagPayload,childTagPayloadLength);
@@ -321,7 +326,7 @@ size_t composeList(uint8_t listType, TagList* tl, void** data) {
     return totalPayloadLength;
 }
 
-size_t composePayload(Tag t, void** data) {
+ssize_t composePayload(Tag t, void** data) {
     size_t payloadLength = getTypeSize(t.type); // initially, then particularly for lists/compounds/strings
     void* payload;
 
@@ -371,7 +376,7 @@ size_t composePayload(Tag t, void** data) {
     return payloadLength;
 }
 
-size_t composeTag(Tag t, void** data) {
+ssize_t composeTag(Tag t, void** data) {
     size_t headerSize = sizeof(uint8_t) + sizeof(uint16_t) + t.nameLength;
     void* tagHeader = calloc(headerSize,sizeof(char));
     ((uint8_t*)tagHeader)[0] = t.type;
@@ -379,13 +384,16 @@ size_t composeTag(Tag t, void** data) {
     memcpy(tagHeader+sizeof(uint8_t),&u16,sizeof(uint16_t));
     memcpy(tagHeader+sizeof(uint8_t) + sizeof(uint16_t), t.name, t.nameLength);
     void* tagPayload;
-    size_t payloadSize = composePayload(t,&tagPayload);
+    ssize_t payloadSize = composePayload(t,&tagPayload);
+    if(payloadSize < 0) {
+        // Some error while composing payload
+        return payloadSize;
+    }
     void* tagData = realloc(tagHeader,headerSize + payloadSize);
     if(tagData == NULL) {
-        fprintf(stderr, "Unable to realloc memory to merge header and payload\n");
         free(tagHeader);
         free(tagPayload);
-        return 0;
+        return MEMORY_ERROR;
     }
     memcpy(tagData + headerSize,tagPayload, payloadSize);
     free(tagPayload);

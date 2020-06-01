@@ -12,6 +12,7 @@
 #include <math.h>
 
 #include "compression.h"
+#include "errors.h"
 
 #define BLOCKS_PER_CHUNK 16
 #define CHUNKS_PER_REGION 32

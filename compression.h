@@ -5,6 +5,8 @@
 #include <zlib.h>
 #include <stdio.h>
 
+#include "errors.h"
+
 #define OS_FLAG_OFFSET 0x9
 
 ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData, int headerless);

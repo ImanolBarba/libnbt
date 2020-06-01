@@ -21,9 +21,8 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData, int h
     }
 
     if(err != Z_OK) {
-        fprintf(stderr, "Unable to initialize zlib zstream for decompression\n");
         free(uncomp);
-        return -1;
+        return ZLIB_STREAM_INIT_ERROR;
     }
   
     do {
@@ -32,10 +31,9 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData, int h
             // Increase size of output buffer
             void* newptr = realloc(uncomp,uncompLength + increase);
             if(newptr == NULL) {
-                fprintf(stderr,"Unable to request memory realloc\n");
                 inflateEnd(&strm);
                 free(uncomp);
-                return -2;
+                return MEMORY_ERROR;
             }
             uncomp = newptr;
             uncompLength += increase;
@@ -47,18 +45,16 @@ ssize_t inflateGzip(void* compData, size_t compDataLen, void** unCompData, int h
         // Inflate another chunk.
         err = inflate(&strm, Z_SYNC_FLUSH);
         if(err != Z_OK && err != Z_STREAM_END) {
-            fprintf(stderr, "Error while inflating buffer: %d - %s.\n", err,strm.msg);
             inflateEnd(&strm);
             free(uncomp);
-            return -3;
+            return ZLIB_INFLATE_ERROR;
         }
     } while(err != Z_STREAM_END);
     uncompLength = strm.total_out;
 
     if(inflateEnd(&strm) != Z_OK) {
-        fprintf(stderr,"Error while deallocating libz zstream\n");
         free(uncomp);
-        return -4;
+        return ZLIB_STREAM_FREE_ERROR;
     }
 
     *unCompData = uncomp;
@@ -85,9 +81,8 @@ ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData, int
     }
     
     if(err != Z_OK) {
-        fprintf(stderr, "Unable to initialize zlib zstream for compression\n");
         free(comp);
-        return -1;
+        return ZLIB_STREAM_INIT_ERROR;
     }
 
     do {
@@ -96,10 +91,9 @@ ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData, int
             // Increase size of output buffer
             void* newptr = realloc(comp, compLength + increase);
             if(newptr == NULL) {
-                fprintf(stderr,"Unable to request memory realloc\n");
                 deflateEnd(&strm);
                 free(comp);
-                return -2;
+                return MEMORY_ERROR;
             }
             comp = newptr;
             compLength += increase;
@@ -111,18 +105,16 @@ ssize_t deflateGzip(void* unCompData, size_t unCompDataLen, void** compData, int
         // deflate another chunk
         err = deflate(&strm, Z_FINISH);
         if(err != Z_OK && err != Z_STREAM_END) {
-            fprintf(stderr, "Error while deflating buffer: %d - %s\n",err,strm.msg);
             deflateEnd(&strm);
             free(comp);
-            return -3;
+            return ZLIB_DEFLATE_ERROR;
         }
     } while(err != Z_STREAM_END);
     compLength = strm.total_out;
     
     if(deflateEnd(&strm) != Z_OK) {
-        fprintf(stderr,"Error while deallocating libz zstream\n");
         free(comp);
-        return -4;
+        return ZLIB_STREAM_FREE_ERROR;
     }
 
     if(!headerless) {

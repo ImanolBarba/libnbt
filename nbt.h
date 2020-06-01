@@ -13,6 +13,8 @@
 #include <errno.h>
 #include <zlib.h>
 
+#include "errors.h"
+
 #ifndef REALLOC_SIZE
 #define REALLOC_SIZE 10
 #endif
@@ -59,7 +61,7 @@ enum TAG {
 
 ssize_t loadDB(const char* filename, void** data);
 void destroyTag(Tag* t);
-unsigned int parseTag(void* addr, Tag* t);
-size_t composeTag(Tag t, void** data);
+ssize_t parseTag(void* addr, Tag* t);
+ssize_t composeTag(Tag t, void** data);
 
 #endif

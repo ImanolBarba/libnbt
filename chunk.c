@@ -35,57 +35,55 @@ int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, siz
     sprintf(regionFilename,"%s/r.%d.%d.mca",regionFolder,region.x,region.z);
 
     if(access(regionFilename,R_OK | W_OK) == -1) {
-        fprintf(stderr,"Can't access file %s: %s\n",regionFilename,strerror(errno));
-        return -1;
+        return ACCESS_ERROR;
     }
 
     int fd = open(regionFilename,O_RDWR);
     if(fd == -1) {
-        fprintf(stderr,"Unable to open region file %s: %s\n",regionFilename,strerror(errno));
-        return -2;
+        return OPEN_ERROR;
     }
     free(regionFilename);
 
     uint32_t chunkHeaderOffset;
     if(pread(fd,&chunkHeaderOffset,sizeof(uint32_t),(relativeChunk.x + relativeChunk.z * CHUNK_OFFSET_LENGTH) * sizeof(uint32_t)) == -1) {
         close(fd);
-        fprintf(stderr,"Unable to read chunk header offset: %s\n",strerror(errno));
-        return -3;
+        return READ_ERROR;
     }
     uint32_t totalChunkLength = (chunkHeaderOffset >> 24) * 4096;
     chunkHeaderOffset = (__bswap_32(chunkHeaderOffset & 0x00FFFFFF) >> 8) * CHUNK_SECTOR_SIZE;
     int pos = lseek(fd,chunkHeaderOffset,SEEK_SET);
     if(pos == -1) {
         close(fd);
-        fprintf(stderr,"Unable to seek to header offset: %s\n",strerror(errno));
-        return -4;
+        return SEEK_ERROR;
     }
 
     ChunkHeader header;
     if(pread(fd,&header,sizeof(ChunkHeader),pos) <= 0) {
         close(fd);
-        fprintf(stderr,"Unable to read chunk header: %s\n",strerror(errno));
-        return -5;
+        return READ_ERROR;
     }
     header.length = __bswap_32(header.length);
 
     void* compressedChunk;
     ssize_t compressedChunkLength = deflateGzip(chunkData,chunkLength,&compressedChunk,(header.compressionType == COMPRESSION_TYPE_ZLIB));
+    if(compressedChunkLength < 0) {
+        // Compression error
+        close(fd);
+        return compressedChunkLength;
+    }
     if(compressedChunkLength > totalChunkLength) {
         // Haven't determined if we can just allocate a new 4KiB sector for the chunk
         // To avoid corrupting the region, let's just make the function fail and retry on another chunk that has
         // free space at the end
         close(fd);
         free(compressedChunk);
-        fprintf(stderr,"Not enough free space to overwrite the chunk.\n\nOriginal chunk size (with padding): %d\nNew chunk size:%d\n",totalChunkLength,(unsigned int)compressedChunkLength);
-        return -6;
+        return INSUFFICIENT_SPACE_FOR_CHUNK;
     }
     header.length = __bswap_32((uint32_t)compressedChunkLength+1);
     if(write(fd,&header,sizeof(ChunkHeader)) <= 0) {
         close(fd);
         free(compressedChunk);
-        fprintf(stderr,"Unable to read chunk header: %s\n",strerror(errno));
-        return -7;
+        return WRITE_ERROR;
     }
     ssize_t nWritten = 0;
     size_t totalWritten = 0;
@@ -95,16 +93,15 @@ int overwriteChunk(const char* regionFolder, ChunkID chunk, void* chunkData, siz
             if(errno == EINTR) {
                 continue;
             }
-            fprintf(stderr,"Unable to write chunk: %s\n",strerror(errno));
             close(fd);
             free(compressedChunk);
-            return -8;
+            return WRITE_ERROR;
         }
         totalWritten += nWritten;
     }
     close(fd);
     free(compressedChunk);
-    return 0;
+    return SUCCESS;
 }
 
 ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
@@ -117,53 +114,42 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
     sprintf(regionFilename,"%s/r.%d.%d.mca",regionFolder,region.x,region.z);
 
     if(access(regionFilename,R_OK) == -1) {
-        fprintf(stderr,"Can't access file %s: %s\n",regionFilename,strerror(errno));
-        return -1;
+        return ACCESS_ERROR;
     }
 
     int fd = open(regionFilename,O_RDONLY);
     if(fd == -1) {
-        fprintf(stderr,"Unable to open region file %s: %s\n",regionFilename,strerror(errno));
-        return -2;
+        return OPEN_ERROR;
     }
     free(regionFilename);
 
     uint32_t chunkHeaderOffset;
     if(pread(fd,&chunkHeaderOffset,sizeof(uint32_t),(relativeChunk.x + relativeChunk.z * CHUNK_OFFSET_LENGTH) * sizeof(uint32_t)) == -1) {
         close(fd);
-        fprintf(stderr,"Unable to read chunk header offset: %s\n",strerror(errno));
-        return -3;
+        return READ_ERROR;
     }
     chunkHeaderOffset = (__bswap_32(chunkHeaderOffset & 0x00FFFFFF) >> 8) * CHUNK_SECTOR_SIZE;
     if(chunkHeaderOffset == 0) {
         // Chunk not present. Hasn't been generated
-        close(fd); 
-        return 0;
+        close(fd);
+        return CHUNK_NOT_PRESENT;
     }
 
     if(lseek(fd,chunkHeaderOffset,SEEK_SET) == -1) {
         close(fd);
-        fprintf(stderr,"Unable to seek to header offset: %s\n",strerror(errno));
-        return -4;
+        return SEEK_ERROR;
     }
 
     ChunkHeader header;
     if(read(fd,&header,sizeof(ChunkHeader)) <= 0) {
         close(fd);
-        fprintf(stderr,"Unable to read chunk header: %s\n",strerror(errno));
-        return -5;
+        return READ_ERROR;
     }
     header.length = __bswap_32(header.length);
     ssize_t chunkLength = header.length;
-    if(header.compressionType != COMPRESSION_TYPE_ZLIB && header.compressionType != COMPRESSION_TYPE_GZIP) {
-        fprintf(stderr, "Invalid compression method. Proably reading the wrong data for the header\n");
+    if((header.compressionType != COMPRESSION_TYPE_ZLIB && header.compressionType != COMPRESSION_TYPE_GZIP) || header.length == 0) {
         close(fd); 
-        return -6;
-    }
-    if(header.length == 0) {
-        fprintf(stderr, "Header length is 0. Probably reading the wrong data for the header\n");
-        close(fd); 
-        return -7;
+        return INVALID_HEADER;
     }
     
     void* compressedChunk = calloc(chunkLength,sizeof(char));
@@ -175,10 +161,9 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
             if(errno == EINTR) {
                 continue;
             }
-            fprintf(stderr,"Unable to read chunk: %s\n",strerror(errno));
             close(fd);
             free(compressedChunk);
-            return -8;
+            return READ_ERROR;
         }
         totalRead += nRead;
     }
@@ -186,11 +171,10 @@ ssize_t loadChunk(const char* regionFolder, ChunkID chunk, void** chunkData) {
 
     void *decompressedChunk;
     chunkLength = inflateGzip(compressedChunk,chunkLength,&decompressedChunk,(header.compressionType == COMPRESSION_TYPE_ZLIB));
-    
-    if(chunkLength <= 0) {
-        fprintf(stderr,"Error while decompressing chunk\n");
+    if(chunkLength < 0) {
+        // Error while decompressing chunk
         free(compressedChunk);
-        return -9;
+        return chunkLength;
     }
     free(compressedChunk);
 
